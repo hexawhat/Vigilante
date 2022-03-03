@@ -1,11 +1,28 @@
 import cv2
 import time
-import datetime
+from datetime import datetime
 import os
+# Attandance
+import numpy as np
+import face_recognition
 
 # DIR
 path_Recordings = 'Data/Recordings/'
 path_NewFaces = 'Data/NewFaces/'
+path_knownFaces ='Data/KnownFaces'
+
+# Attendance
+faces_knownFaces = []
+faces_names = []
+faces_myList = os.listdir(path_knownFaces)
+print(f'Debug: List of known faces:\n {faces_myList}')
+
+
+#   Scans folder to create class names and reference
+for cl in faces_myList:
+    curImg = cv2.imread(f'{path_knownFaces}/{cl}')
+    faces_knownFaces.append(curImg)
+    faces_names.append(os.path.splitext(cl)[0])
 
 # CAPTURE DEVICE
 cap = cv2.VideoCapture(0)#('rtsp://admin:admin@192.168.0.31/iphone/11?admin:admin&')
@@ -54,23 +71,48 @@ def find_new_faces():
     return new_faces, roi_gray
 
 
+def markAttendance(name):  # name
+    with open('Attendance.csv', 'r+') as f:
+        myDataList = f.readlines()
+        print('DEBUG: myDataList', myDataList)
+        nameList = []
+        for line in myDataList:
+            entry = line.split(',')
+            nameList.append(entry[0])
+            print(nameList)
+        #if name not in nameList:  # comment this line out if you do not want to check
+            # if the name is already on the list
+            now = datetime.now()
+            dtString = now.strftime('%d-%m-%Y-%H-%M-%S')
+            f.writelines(f'\n{name},{dtString}')
+
+
+def findEncodings(faces_knownFaces):  #
+    encodeList = []
+    for img in faces_knownFaces:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        encode = face_recognition.face_encodings(img)[0]
+        encodeList.append(encode)
+    return encodeList
+
+
+encodeListKnown = findEncodings(faces_knownFaces)
+
 while True:
     _, frame = cap.read()
-    current_time = datetime.datetime.now().strftime("%d-%m-%Y-%H-%M-%S")
+    current_time = datetime.now().strftime("%d-%m-%Y-%H-%M-%S")
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    #print('Debug: ' + gray)
     faces = face_cascade.detectMultiScale(gray, faces_scaleFactor, faces_sensitivity)
     bodies = face_cascade.detectMultiScale(gray, bodies_scaleFactor, bodies_sensitivity)
-
     if len(faces) + len(bodies) > 0:
+        if new_face_finder_mode:
+            find_new_faces()
         if detection:
             timer_started = False
         else:
             detection = True
             out = cv2.VideoWriter(f"{path_Recordings} + Vid_{current_time}.mp4", fourcc, frame_rate, frame_size)
-            print("Started Recording!\nPress \'q\' to 💀 the recording")
-            if new_face_finder_mode:
-                find_new_faces()
+            print("Started Recording!\nPress \'q\' to STOP the RECORDING")
     elif detection:
         if not timer_started:
             timer_started = True
@@ -81,16 +123,39 @@ while True:
                 timer_started = False
                 out.release()
                 print('Stop Recording!')
-
     if detection:
         out.write(frame)
+        # Face Recon
+        imgS = cv2.resize(frame, (0, 0), None, 0.25, 0.25)  # resize to make it faster
+        imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)  # convert into RGB
+        #  Step 1 Detect face location
+        facesCurFrame = face_recognition.face_locations(imgS)  # Find face location on current frame small image
+        print("facesCurFrame",facesCurFrame)
+        encodesCurFrame = face_recognition.face_encodings(imgS, facesCurFrame)  # face encoding for c f
+        #   Step 3
+        #   Compare the results
+        #   loop trough all faces
+        for encodeFace, faceLoc in zip(encodesCurFrame, facesCurFrame):
+            # zip makes possible to grab face and encoding
+            matches = face_recognition.compare_faces(encodeListKnown, encodeFace)  # compare faces
+            faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)  # find distance
+            matchIndex = np.argmin(faceDis)  # Create index to identify the person
+            #  Uses Index to display
+            if matches[matchIndex]: # compare
+                name = faces_names[matchIndex].upper()
+                y1, x2, y2, x1 = faceLoc
+                y1, x2, y2, x1 = y1 * 4, x2 * 4, y2 * 4, x1 * 4
+               # cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2) # draw rectangle / optional
+               # cv2.rectangle(frame, (x1, y2 - 35), (x2, y2), (0, 255, 0), cv2.FILLED) # draw rectangle optional
+                cv2.putText(frame, name, (x1 + 6, y2 - 6), cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2) # draw name / optional
+                markAttendance(name)
 
     # debug:
     # for (x, y, width, height) in faces:
     #    cv2.rectangle(frame, (x, y), (x + width, y + height), (0, 255, 0), 3)
 
 # CONFIG - DISPLAY
-    #cv2.imshow("Camera", frame)
+    cv2.imshow("Vigilante soft. Beta Version", frame)
 
     if cv2.waitKey(1) == ord('q'):
         break
